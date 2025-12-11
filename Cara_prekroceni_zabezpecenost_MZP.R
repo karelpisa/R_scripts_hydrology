@@ -2,7 +2,7 @@ data_dif %>%
   select(DTM, ID, SID, SCE, type, PER, Q_bil_souc, Q_GR4J_souc) %>% 
   distinct(DTM, ID, .keep_all = TRUE) -> dataMZP
 
-MZP <-  function(data) {
+MZP <-  function(data) { #vytvoření rakouského MZP (5% kvantil prumerneho srpnoveho prutoku)
   data <- data %>%
     mutate(year = year(DTM),
            month = month(DTM)) %>%
