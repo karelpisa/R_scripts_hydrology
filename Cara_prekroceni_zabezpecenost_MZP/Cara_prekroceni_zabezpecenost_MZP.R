@@ -1,7 +1,4 @@
-data_dif %>% 
-  select(DTM, ID, SID, SCE, type, PER, Q_bil_souc, Q_GR4J_souc) %>% 
-  distinct(DTM, ID, .keep_all = TRUE) -> dataMZP
-
+library(tidyverse)
 MZP <-  function(data) {
   data <- data %>%
     mutate(year = year(DTM),
