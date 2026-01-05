@@ -1,4 +1,9 @@
 library(tidyverse)
+# setwd("../../R_scripts_hydrology/Cara_prekroceni_zabezpecenost_MZP/")
+data <- read_csv("../../R_scripts_hydrology/Cara_prekroceni_zabezpecenost_MZP/data.csv") 
+
+#funkce pro výpočet MZP podle rakouské metodiky
+#5% kvantil průměrného srpnového průtoku
 MZP <-  function(data) {
   data <- data %>%
     mutate(year = year(DTM),
@@ -25,86 +30,129 @@ MZP <-  function(data) {
   return(MZP_df)
 }
 
-mzp_df <- MZP(dataMZP)  
+mzp_df <- MZP(data)  
 
-zabezpec <- list()
-for (typemod in unique(data_dif$type)) {
-  data_dif %>% 
-    mutate(PER = factor(PER, levels = c("NEAR", "MID", "FAR"))) %>% 
-    filter(type == typemod) -> data_cmip
-  
-  for(id in unique(data_cmip$ID)){
-    # dir.create(paste0("GRAFY/cara_prekroceni", typemod, "/", id), recursive = TRUE, showWarnings = FALSE)
-    data_cmip %>% 
-      filter(ID == id) -> data_id
+
+#cela funkce s iteracema napric typama, periodama atd klimatickych modelu
+cara_prekroceni <- function() {
+  zabezpec <- list()
+  for (typemod in unique(data$type)) { #filtr na periodu
+    data %>%
+      mutate(PER = factor(PER, levels = c("NEAR", "MID", "FAR"))) %>%
+      filter(type == typemod) -> data_per
     
-    mzp_df %>% 
-      filter(ID == id) -> mzp_id
-    
-    for (hydromodel in c("Q_bilan", "Q_GR4J") ) {
-      data_id %>% 
-        pivot_longer(cols = c(Q_bilan, Q_GR4J, Qobs),
-                     names_to = "model_obs",
-                     values_to = "Q_all") %>% 
-        select(DTM, ID, Q_all, model_obs, SID, SCE, type, PER) %>% 
-        filter(model_obs == hydromodel) -> data_long
+    for (id in unique(data_cmip$ID)) { #filtr na ID povodé
+      # dir.create(paste0("GRAFY/cara_prekroceni", typemod, "/", id), recursive = TRUE, showWarnings = FALSE)
+      data_per %>%
+        filter(ID == id) -> data_id
       
-      mzp_id %>% 
-        filter(typ_Q == hydromodel) -> mzp      
+      mzp_df %>%
+        filter(ID == id) -> mzp_id
       
-      data_long %>% 
-        group_by(ID, model_obs, SID, SCE, PER, type) %>% 
-        arrange(desc(Q_all)) %>% 
-        mutate(poradi = row_number(),
-               n = n(),
-               pravdep = poradi / (n+1)) %>% 
-        ungroup() -> data_plot
-      key <- paste(id, hydromodel, typemod, sep = "-")
-      zabezpec[[key]] <- data_plot
-      
-      
-      mzp_value <- mzp_id %>% 
-        filter(typ_Q == hydromodel) %>% 
-        pull(MZP_rak) %>% 
-        as.numeric()
-      
-      data_plot %>%
-        group_by(SID, SCE, type, PER) %>% 
-        mutate(mzp = ifelse(Q_all < mzp_value, 1, 0)) %>% 
-        filter(mzp == 0) %>%  
-        filter(pravdep == max(pravdep)) -> prekroc
-      
-      
-      p <- ggplot(data = data_plot)+
-        geom_line(aes(x = pravdep, y = Q_all, color = interaction(SID, model_obs), group = interaction(SID, model_obs)),
-                  alpha = 0.6)+
-        geom_hline(yintercept = mzp_value, color = "red")+
-        geom_vline(data = prekroc, aes(xintercept = pravdep, color = interaction(SID, model_obs)))+
-        annotate("text", x = min(data_plot$pravdep), y = mzp_value, 
-                 label = round(mzp_value, 3), 
-                 vjust = -0.5, hjust = 0, color = "red")+
-        geom_text(
-          data = prekroc,
-          aes(x = pravdep, y = 2000,  
+      for (hydromodel in c("Q_bilan", "Q_GR4J")) { #filtr na použitý hydrologický model - je třeba definovat
+        data_id %>%
+          pivot_longer(
+            cols = c(Q_bilan, Q_GR4J, Qobs),
+            names_to = "model_obs",
+            values_to = "Q_all"
+          ) %>%
+          select(DTM, ID, Q_all, model_obs, SID, SCE, type, PER) %>%
+          filter(model_obs == hydromodel) -> data_long
+        
+        mzp_id %>%  #filtr MZP (z jakeho modelu je MZP pocitano)
+          filter(typ_Q == hydromodel) -> mzp
+        
+        data_long %>%   #samotny vypocet hodnot pro graf
+          group_by(ID, model_obs, SID, SCE, PER, type) %>% #groupování po skupinách pro plot
+          arrange(desc(Q_all)) %>%  #serazení
+          mutate(poradi = row_number(),       #urceni poradi a vypocet pravdepodobnosti
+                 n = n(),
+                 pravdep = poradi / (n + 1)) %>%
+          ungroup() -> data_plot
+        key <- paste(id, hydromodel, typemod, sep = "-")
+        zabezpec[[key]] <- data_plot
+        
+        
+        mzp_value <- mzp_id %>%
+          filter(typ_Q == hydromodel) %>%
+          pull(MZP_rak) %>%
+          as.numeric()
+        
+        data_plot %>% #kriticka hodnota prekroceni MZP
+          group_by(SID, SCE, type, PER) %>%
+          mutate(mzp = ifelse(Q_all < mzp_value, 1, 0)) %>%
+          filter(mzp == 0) %>%
+          filter(pravdep == max(pravdep)) -> prekroc
+        
+        
+        p <- ggplot(data = data_plot) +
+          geom_line(aes(
+            x = pravdep,
+            y = Q_all,
+            color = interaction(SID, model_obs),
+            group = interaction(SID, model_obs)
+          ),
+          alpha = 0.6) +
+          geom_hline(yintercept = mzp_value, color = "red") +
+          geom_vline(data = prekroc, aes(
+            xintercept = pravdep,
+            color = interaction(SID, model_obs)
+          )) +
+          annotate(
+            "text",
+            x = min(data_plot$pravdep),
+            y = mzp_value,
+            label = round(mzp_value, 3),
+            vjust = -0.5,
+            hjust = 0,
+            color = "red"
+          ) +
+          geom_text(
+            data = prekroc,
+            aes(
+              x = pravdep,
+              y = 2000,
               label = round(pravdep, 3),
-              color = interaction(SID, model_obs)),
-          vjust = -0.5,  
-          angle = 90,    
-          size = 2
-        )+
-        labs(x = "Pravděpodobnost",              
-             y = "Průtok [m³/s]")+
-        labs(color = NULL)+
-        ggtitle(paste("Čára překročení pro minimální zůstatkový průtok. Povodí: ", id, "  Generace: ", typemod))+
-        scale_y_log10()+
-        facet_grid(SCE~PER)+
-        theme_light()
-      ggsave(paste0("GRAFY/zabezpecenost_vse/", id, "_", typemod, "_", hydromodel, ".png"), plot = p, width = 15, height = 10, dpi = 300)
-      
+              color = interaction(SID, model_obs)
+            ),
+            vjust = -0.5,
+            angle = 90,
+            size = 2
+          ) +
+          labs(x = "Pravděpodobnost", y = "Průtok [m³/s]") +
+          labs(color = NULL) +
+          ggtitle(
+            paste(
+              "Čára překročení pro minimální zůstatkový průtok. Povodí: ",
+              id,
+              "  Generace: ",
+              typemod
+            )
+          ) +
+          scale_y_log10() +
+          facet_grid(SCE ~ PER) +
+          theme_light()
+        ggsave(
+          paste0("Grafy",
+            id,
+            "_",
+            typemod,
+            "_",
+            hydromodel,
+            ".png"
+          ),
+          plot = p,
+          width = 15,
+          height = 10,
+          dpi = 300
+        )
+        
+      }
     }
   }
 }
 
+cara_prekroceni()
 
 write_rds(zabezpec, "zabezpecenost.rds")
 
